@@ -39,15 +39,6 @@ sub new {
     my $log = BBSConnectionGateway::Log::Logger->new(name => $class);
     my $lock_file = $args{conn_lock_file} || './conn.log';
 
-    my $destination_bbses = $config->get('destination_bbs_map', '');
-    my @dest_bbs_entries = split(',', $destination_bbses);
-
-    my $dialup_mode_connect_bytes_config = $config->get('destination_bbs_force_dialup_mode_connect_bytes', '');
-    my $dialup_connect_bytes = '';
-    foreach my $byte (split(',', $dialup_mode_connect_bytes_config)) {
-        $dialup_connect_bytes .= pack('C', $byte);
-    }
-
     my $com_port = $config->get('modem_com_port', '/dev/ttyACM0');
     my $baud_rate = $config->get('modem_baud_rate', 300);
     my $data_bits = $config->get('modem_databits', 8);
@@ -93,9 +84,6 @@ sub new {
         config => $config,
         log => $log,
         conn_lock_file => $lock_file,
-        dest_bbs_entries => \@dest_bbs_entries,
-        dest_bbs_force_dialup_connect_bytes => $dialup_connect_bytes,
-        modem_config_file => $modem_config_file,
     };
 
     $log->info("Constructor completed successfully.");
@@ -117,17 +105,26 @@ sub _conn_lock_file {
 }
 
 sub _modem_config_file {
-    return shift->{modem_config_file};
+    return shift->_config->get('modem_temp_config_file', './modem.cfg');
 }
 
 sub _dest_bbses {
     my ($self) = @_;
-    return $self->{dest_bbs_entries} // [ ];
+    my $destination_bbses = $self->_config->get('destination_bbs_map', '');
+    my @dest_bbs_entries = split(',', $destination_bbses);
+    return \@dest_bbs_entries;
 }
 
 
 sub _dest_bbs_force_dialup_connect_bytes {
-    return shift->{dest_bbs_force_dialup_connect_bytes} // '';
+    my ($self) = @_;
+
+    my $dialup_mode_connect_bytes_config = $self->_config->get('destination_bbs_force_dialup_mode_connect_bytes', '');
+    my $dialup_connect_bytes = '';
+    foreach my $byte (split(',', $dialup_mode_connect_bytes_config)) {
+        $dialup_connect_bytes .= pack('C', $byte);
+    }
+    return $dialup_connect_bytes;
 }
 
 
@@ -441,6 +438,11 @@ sub _wait_for_incoming_call {
             }
         }
     }
+
+    #refresh config between valid phone calls
+    #TODO : Modem refreshes/restarts from config file generated in constructor. Even though
+    #       config for other things are refreshed, the base modem configuration IS NOT.
+    $self->_config->refresh_config;
 
     $modem_dev->read_const_time($orig_read_const_time); # restore normal timeout
 

@@ -187,6 +187,11 @@ sub _accept_connections {
     while ($is_running) {
 
         my $client_socket = $self->_server_socket->accept;
+
+        # check for stale configs between connections.
+        $self->_config->refresh_config;
+        $self->_template->refresh_config;
+
         if ($client_socket && $client_socket->connected) {
 
             my $client_ip = $client_socket->peerhost;

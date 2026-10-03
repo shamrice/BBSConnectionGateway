@@ -17,12 +17,17 @@ sub new {
     my $package = $args{package} // "_"; #default to root level section
     $package =~ s/^.*::|\s*$//g; # don't care about namespace, just package name
 
+    my $config_last_modified = (stat($config_file))[9] or confess "Cannot stat config file: $config_file :: $!";
+
     my $config = Config::Tiny->read($config_file)->{$package};
     confess "Failed to read config file: $config_file :: " . $Config::Tiny::errstr if ($Config::Tiny::errstr);
 
     $log->info("Built config for $package");
 
     my $self = {
+        package_name => $package,
+        config_last_modified => $config_last_modified,
+        config_file => $config_file,
         config => $config,
         log => $log,
         section => $package,
@@ -36,7 +41,37 @@ sub _log {
 }
 
 sub _config {
-    return shift->{config};
+    my ($self, $new_config) = @_;
+    if ($new_config) {
+        $self->{config} = $new_config;
+    }
+    return $self->{config};
+}
+
+=head2 refresh_config
+    Checks to see if the current configuration file has changed
+    since the last configuration check. If it has, it will
+    reload the contents of the config file
+
+    returns true if config was refreshed.
+=cut
+sub refresh_config {
+    my ($self) = @_;
+    my $current_last_mod = (stat($self->{config_file}))[9];
+    if (!$current_last_mod) {
+        $self->_log->fatal("Failed to stat current config file: " . $self->{config_file} . " :: Using cached values!");
+        return;
+    }
+
+    if ($current_last_mod > $self->{config_last_modified}) {
+        $self->_log->warn("Configuration has been updated! Reloading config for: [" . $self->{package_name} . "] :: PREV=" . $self->{config_last_modified} . " :: CURRENT=$current_last_mod");
+        $self->{config_last_modified} = $current_last_mod;
+        $self->_config(Config::Tiny->read($self->{config_file})->{$self->{package_name}});
+        confess "Failed to read config file: " . $self->{config_file} . " :: " . $Config::Tiny::errstr if ($Config::Tiny::errstr);
+        return 1;
+    }
+    return;
+
 }
 
 sub _section {
@@ -59,8 +94,6 @@ sub get {
     $config_key //= confess "Missing config key call to get_config";
     $default_value //= "";
 
-    $self->_log->debug("Getting config for: " . $self->_section . " :: $config_key");
-
     # check if env var is set up and if so, use that instead.
     my $env_var = uc($self->_section . "_" . $config_key);
     if (exists $ENV{$env_var}) {
@@ -69,7 +102,7 @@ sub get {
             return $ENV{$env_var};
         }
     }
-
+    $self->refresh_config;
     return $self->_config->{$config_key} // $default_value;
 }
 

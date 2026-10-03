@@ -88,7 +88,11 @@ sub _config {
 }
 
 sub _render_mode {
-    return shift->{render_mode};
+    my ($self, $new_render_mode) = @_;
+    if ($new_render_mode) {
+        $self->{render_mode} = $new_render_mode;
+    }
+    return $self->{render_mode};
 }
 
 sub _valid_templates {
@@ -100,12 +104,24 @@ sub _template_cache {
 }
 
 
+sub refresh_config {
+    my ($self) = @_;
+
+    # TODO : Does not refresh the template repo cache
+
+    $self->_config->refresh_config;
+    $self->_render_mode(uc($self->_config->get('render_mode', RENDER_MODE_FILE)));
+    return;
+}
+
+
 sub render {
     my ($self, $client, $template_type) = @_;
 
     $self->_log->info("Rendering template: $template_type");
 
     return if ($self->_render_mode eq RENDER_MODE_NONE);
+
 
     if (!grep(/^\Q$template_type\E$/, $self->_valid_templates->@*)) {
         $self->_log->fatal("Invalid template type: $template_type :: Sending client error message");
