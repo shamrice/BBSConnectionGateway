@@ -6,6 +6,11 @@ use Carp;
 use Config::Tiny;
 use FindBin qw($Bin);
 
+use constant {
+    CONFIG_MOD_CHECK_DURATION => 300,
+};
+
+
 sub new {
     my ($class, %args) = @_;
 
@@ -27,6 +32,7 @@ sub new {
     my $self = {
         package_name => $package,
         config_last_modified => $config_last_modified,
+        config_last_checked => time,
         config_file => $config_file,
         config => $config,
         log => $log,
@@ -57,6 +63,12 @@ sub _config {
 =cut
 sub refresh_config {
     my ($self) = @_;
+
+    # don't refresh the config if it's been less than CONFIG_MOD_CHECK_DURATION seconds since last check
+    return if (time - $self->{config_last_checked} < CONFIG_MOD_CHECK_DURATION);
+
+    $self->{config_last_checked} = time;
+
     my $current_last_mod = (stat($self->{config_file}))[9];
     if (!$current_last_mod) {
         $self->_log->fatal("Failed to stat current config file: " . $self->{config_file} . " :: Using cached values!");
