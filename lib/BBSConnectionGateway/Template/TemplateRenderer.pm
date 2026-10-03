@@ -1,4 +1,4 @@
-package BSCF::Template::TemplateRenderer;
+package BBSConnectionGateway::Template::TemplateRenderer;
 
 use v5.34;
 
@@ -7,8 +7,8 @@ use Config::Tiny;
 use Exporter qw(import);
 use FindBin qw($Bin);
 
-use BSCF::Configuration::Config;
-use BSCF::Log::Logger;
+use BBSConnectionGateway::Configuration::Config;
+use BBSConnectionGateway::Log::Logger;
 
 use constant {
     BUSY_TEMPLATE => 'busy_screen',
@@ -32,8 +32,8 @@ our @EXPORT_OK = qw(
 sub new {
     my ($class, %args) = @_;
 
-    my $log = BSCF::Log::Logger->new(name => $class);
-    my $config = BSCF::Configuration::Config->new(package => __PACKAGE__);
+    my $log = BBSConnectionGateway::Log::Logger->new(name => $class);
+    my $config = BBSConnectionGateway::Configuration::Config->new(package => __PACKAGE__);
     my @valid_templates = (BUSY_TEMPLATE, OFFLINE_TEMPLATE, CONNECT_TEMPLATE);
 
     my $render_mode = uc($config->get('render_mode', RENDER_MODE_FILE));

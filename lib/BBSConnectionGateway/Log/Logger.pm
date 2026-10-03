@@ -1,4 +1,4 @@
-package BSCF::Log::Logger;
+package BBSConnectionGateway::Log::Logger;
 
 use v5.34;
 
@@ -8,7 +8,7 @@ use feature qw(isa try);
 
 use Carp;
 
-use BSCF::Log::LogQueue;
+use BBSConnectionGateway::Log::LogQueue;
 
 use constant {
     LOG_LEVEL_TRACE => 'trace',
@@ -84,7 +84,7 @@ sub _logger {
     my ($self, $level, $text) = @_;
     return if (!$text);
     try {
-        BSCF::Log::LogQueue::enqueue_log($self->_logger_name, $level, $text);
+        BBSConnectionGateway::Log::LogQueue::enqueue_log($self->_logger_name, $level, $text);
     } catch ($enqueue_error) {
         carp("Failed to enqueue log item. logger: " . $self->_logger_name . " :: level: $level :: text: $text :: Error: $enqueue_error");
     }

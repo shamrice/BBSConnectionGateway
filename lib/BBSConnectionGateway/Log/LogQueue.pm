@@ -1,4 +1,4 @@
-package BSCF::Log::LogQueue;
+package BBSConnectionGateway::Log::LogQueue;
 
 use v5.34;
 
@@ -18,7 +18,7 @@ use lib("$Bin/../lib");
 no warnings qw(experimental::try);
 
 =pod
-    A shared log queue for all BSCF Logger instances
+    A shared log queue for all BBSConnectionGateway Logger instances
     across all spawned threads.
 
     Enqueued log entries are sent to the thread queue for

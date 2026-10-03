@@ -1,4 +1,4 @@
-package BSCF::Configuration::Config;
+package BBSConnectionGateway::Configuration::Config;
 
 use v5.34;
 
@@ -9,7 +9,7 @@ use FindBin qw($Bin);
 sub new {
     my ($class, %args) = @_;
 
-    my $log = BSCF::Log::Logger->new(name => $class);
+    my $log = BBSConnectionGateway::Log::Logger->new(name => $class);
 
     my $config_file = $args{config} // "$Bin/../config.ini";
 

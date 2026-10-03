@@ -1,4 +1,4 @@
-package BSCF::Modem::ModemConnectionHandler;
+package BBSConnectionGateway::Modem::ModemConnectionHandler;
 
 use v5.34;
 use feature qw(try);
@@ -35,8 +35,8 @@ $Data::Dumper::Sortkeys = 1;
 sub new {
     my ($class, %args) = @_;
 
-    my $config = BSCF::Configuration::Config->new(package => $class);
-    my $log = BSCF::Log::Logger->new(name => $class);
+    my $config = BBSConnectionGateway::Configuration::Config->new(package => $class);
+    my $log = BBSConnectionGateway::Log::Logger->new(name => $class);
     my $lock_file = $args{conn_lock_file} || './conn.log';
 
     my $destination_bbses = $config->get('destination_bbs_map', '');

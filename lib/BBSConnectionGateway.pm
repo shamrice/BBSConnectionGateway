@@ -1,4 +1,4 @@
-package BBSSingleConnectionFilter;
+package BBSConnectionGateway;
 
 use v5.34;
 use feature qw(try);
@@ -17,11 +17,11 @@ use IO::Socket::INET;
 use POSIX qw(strftime);
 use Thread::Queue;
 
-use BSCF::Configuration::Config;
-use BSCF::Log::Logger;
-use BSCF::Log::LogQueue;
-use BSCF::Modem::ModemConnectionHandler;
-use BSCF::Template::TemplateRenderer qw(BUSY_TEMPLATE OFFLINE_TEMPLATE CONNECT_TEMPLATE MAX_CONNECTIONS_TEMPLATE);
+use BBSConnectionGateway::Configuration::Config;
+use BBSConnectionGateway::Log::Logger;
+use BBSConnectionGateway::Log::LogQueue;
+use BBSConnectionGateway::Modem::ModemConnectionHandler;
+use BBSConnectionGateway::Template::TemplateRenderer qw(BUSY_TEMPLATE OFFLINE_TEMPLATE CONNECT_TEMPLATE MAX_CONNECTIONS_TEMPLATE);
 
 use constant {
     ATASCII_CURSOR_UP_CODE => 28,
@@ -45,7 +45,7 @@ sub new {
     my ($class, %args) = shift;
 
     my $config_file = $args{config};
-    my $config = BSCF::Configuration::Config->new(package => __PACKAGE__);
+    my $config = BBSConnectionGateway::Configuration::Config->new(package => __PACKAGE__);
 
     my $server_socket = IO::Socket::INET->new(
        # LocalHost => $config->get('server_host'),
@@ -66,8 +66,8 @@ sub new {
         pack('l!l!', $config->get('server_input_timeout', 10), 0)
     ) or confess "Failed to set recv timout: $!";
 
-    my $log = BSCF::Log::Logger->new(name => $class);
-    my $template_renderer = BSCF::Template::TemplateRenderer->new;
+    my $log = BBSConnectionGateway::Log::Logger->new(name => $class);
+    my $template_renderer = BBSConnectionGateway::Template::TemplateRenderer->new;
 
     my @blocked_ip_prefixes = split(/,/, $config->get('ip_block_list', ''));
     my @allowed_ip_prefixes = split(/,/, $config->get('ip_allow_list', ''));
@@ -133,12 +133,12 @@ sub _template {
 
 sub run {
     my ($self) = @_;
-    $self->_log->info("BSCF starting...");
+    $self->_log->info("BBSConnectionGateway starting...");
 
     $is_running = 1;
 
     my $log_queue_thread = threads->new(sub {
-        BSCF::Log::LogQueue::log_queue_handler_thread;
+        BBSConnectionGateway::Log::LogQueue::log_queue_handler_thread;
     });
 
 
@@ -156,7 +156,7 @@ sub run {
         my $dialup_thread = threads->new(sub {
             while (1) {
                 try {
-                    my $modem_handler = BSCF::Modem::ModemConnectionHandler->new(conn_lock_file => $self->_conn_lock_file);
+                    my $modem_handler = BBSConnectionGateway::Modem::ModemConnectionHandler->new(conn_lock_file => $self->_conn_lock_file);
                     $modem_handler->run;
                 } catch ($dialup_ex) {
                     $self->_log->fatal("Fatal error creating/running dialup thread. Sleeping 5 minutes and trying again... :: ERROR: $dialup_ex");
@@ -179,7 +179,7 @@ sub run {
 
 sub _accept_connections {
     my ($self) = @_;
-    $self->_log->warn("BSCF Server v$VERSION is up and waiting for connections!");
+    $self->_log->warn("BBSConnectionGateway Server v$VERSION is up and waiting for connections!");
 
     my $num_worker_threads = threads->list(threads::all); # workers are set up before connections so threads will already be running.
     my $max_num_user_threads = $self->_config->get('max_num_user_connections', 5);

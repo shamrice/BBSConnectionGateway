@@ -1,7 +1,7 @@
 #!/bin/bash
 
-echo "Stopping BSCF..."
+echo "Stopping BBSConnectionGateway..."
 echo "Killing any existing process..."
-pkill -f 'script/bscf'
+pkill -f 'script/bbscg'
 
 echo "Done"

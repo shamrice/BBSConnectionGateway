@@ -1,16 +1,16 @@
 #!/bin/bash
 
-echo "Starting/Restarting BSCF..."
+echo "Starting/Restarting BBSConnectionGateway..."
 echo "Killing any existing process..."
-pkill -f 'script/bscf'
+pkill -f 'script/bbscg'
 
 echo "Checking if dependencies need to be updated..."
 cpanm --installdeps -n .
 
 PWD=`pwd`
-STDOUT_LOG=../logs/bscf_server.log
+STDOUT_LOG=../logs/bbscg_server.log
 
-echo "Starting BSCF..."
-nohup ${PWD}/script/bscf >> $STDOUT_LOG 2>&1 &
+echo "Starting BBSConnectionGateway..."
+nohup ${PWD}/script/bbscg >> $STDOUT_LOG 2>&1 &
 
-echo "BSCF startup complete."
+echo "BBSConnectionGateway startup complete."
