@@ -29,6 +29,7 @@ our @EXPORT_OK = qw(
     MAX_CONNECTIONS_TEMPLATE
 );
 
+
 sub new {
     my ($class, %args) = @_;
 
@@ -36,28 +37,65 @@ sub new {
     my $config = BBSConnectionGateway::Configuration::Config->new(package => __PACKAGE__);
     my @valid_templates = (BUSY_TEMPLATE, OFFLINE_TEMPLATE, CONNECT_TEMPLATE);
 
-    my $render_mode = uc($config->get('render_mode', RENDER_MODE_FILE));
+    my $self = {
+        config => $config,
+        log => $log,
+        valid_templates => \@valid_templates,
+    };
 
-    my @valid_render_modes = (RENDER_MODE_FILE, RENDER_MODE_MSG, RENDER_MODE_ALL, RENDER_MODE_NONE);
-    if (!grep(/^\Q$render_mode\E$/, @valid_render_modes)) {
-        $log->error("Invalid render mode configured: $render_mode :: Valid modes: [" . join(',', @valid_render_modes) . "] :: Defaulting to mode: " . RENDER_MODE_FILE);
-        $render_mode = RENDER_MODE_FILE;
+
+    return bless($self, $class);
+}
+
+
+sub _log {
+    return shift->{log};
+}
+
+
+sub _config {
+    return shift->{config};
+}
+
+
+sub _valid_templates {
+    return shift->{valid_templates};
+}
+
+
+sub _render_mode {
+    my ($self, $is_refresh) = @_;
+    if (!defined $self->{render_mode} || $is_refresh) {
+        my $new_render_mode = uc($self->_config->get('render_mode', RENDER_MODE_FILE));
+        my @valid_render_modes = (RENDER_MODE_FILE, RENDER_MODE_MSG, RENDER_MODE_ALL, RENDER_MODE_NONE);
+        if (!grep(/^\Q$new_render_mode\E$/, @valid_render_modes)) {
+            $self->_log->error("Invalid render mode configured: $new_render_mode :: Valid modes: [" . join(',', @valid_render_modes) . "] :: Defaulting to mode: " . RENDER_MODE_FILE);
+            $new_render_mode = RENDER_MODE_FILE;
+        }
+        $self->{render_mode} = $new_render_mode;
     }
+    return $self->{render_mode} // RENDER_MODE_FILE;
+}
 
-    my %template_cache;
 
-    # Populate template file cache for modes that send the template files.
-    if ($render_mode eq RENDER_MODE_FILE || $render_mode eq RENDER_MODE_ALL) {
-        foreach my $template_type (@valid_templates) {
+sub _template_cache {
+    my ($self, $is_refresh) = @_;
+
+    if (!defined $self->{template_cache} || $is_refresh) {
+
+        # Populate template file cache for modes that send the template files.
+
+        my %template_cache;
+        foreach my $template_type ($self->_valid_templates->@*) {
             my @temp_template_data;
-            my $file = $config->get($template_type . '_file', '');
+            my $file = $self->_config->get($template_type . '_file', '');
             if (! -e $file) {
-                $log->error("Template file was not found for template: $template_type!");
+                $self->_log->error("Template file was not found for template: $template_type!");
                 next;
             }
 
             open(my $FH, "<", $file) or do {
-                $log->fatal("Missing or error reading: $file ! :: $!");
+                $self->_log->fatal("Missing or error reading: $file ! :: $!");
                 next;
             };
 
@@ -66,51 +104,17 @@ sub new {
 
             $template_cache{$template_type} = \@temp_template_data;
         }
+        $self->{template_cache} = \%template_cache;
     }
-
-    my $self = {
-        config => $config,
-        log => $log,
-        render_mode => $render_mode,
-        valid_templates => \@valid_templates,
-        template_cache => \%template_cache,
-    };
-
-    return bless($self, $class);
-}
-
-sub _log {
-    return shift->{log};
-}
-
-sub _config {
-    return shift->{config};
-}
-
-sub _render_mode {
-    my ($self, $new_render_mode) = @_;
-    if ($new_render_mode) {
-        $self->{render_mode} = $new_render_mode;
-    }
-    return $self->{render_mode};
-}
-
-sub _valid_templates {
-    return shift->{valid_templates};
-}
-
-sub _template_cache {
     return shift->{template_cache} // { };
 }
 
 
 sub refresh_config {
     my ($self) = @_;
-
-    # TODO : Does not refresh the template repo cache
-
     $self->_config->refresh_config;
-    $self->_render_mode(uc($self->_config->get('render_mode', RENDER_MODE_FILE)));
+    $self->_render_mode(1);
+    $self->_template_cache(1);
     return;
 }
 
@@ -121,7 +125,6 @@ sub render {
     $self->_log->info("Rendering template: $template_type");
 
     return if ($self->_render_mode eq RENDER_MODE_NONE);
-
 
     if (!grep(/^\Q$template_type\E$/, $self->_valid_templates->@*)) {
         $self->_log->fatal("Invalid template type: $template_type :: Sending client error message");
