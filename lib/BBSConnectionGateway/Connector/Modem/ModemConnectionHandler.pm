@@ -513,10 +513,17 @@ sub run {
                 }
             }
 
+            if ($selected_bbs_info->{is_busy}) {
+                $modem->write($self->_newline . "Sorry, " . $selected_bbs_info->{name} . " is currently busy!" . $self->_newline . "Please try again later." . $self->_newline);
+                $self->_log->warn("Failed to wait for data to write") if (!$modem->write_drain);
+                sleep 5;
+                die "Destination  BBS: " . $selected_bbs_info->{name} . " is currently busy. Disconnecting user...";
+            }
+
             $server_socket = $self->_connect_to_remote_bbs($selected_bbs_info);
 
             if (!$server_socket) {
-                $modem->write($self->_newline . "Sorry, BBS is currently offline!" . $self->_newline . "Please try again later." . $self->_newline);
+                $modem->write($self->_newline . "Sorry, " . $selected_bbs_info->{name} . " is currently offline!" . $self->_newline . "Please try again later." . $self->_newline);
                 $self->_log->warn("Failed to wait for data to write") if (!$modem->write_drain);
                 sleep 5;
                 confess "No destination BBS selected to connect to. Disconnecting user...";
