@@ -175,8 +175,15 @@ sub _get_online_bbses {
 
         my $is_busy = 0;
         if ($use_conn_lock && -e $self->_conn_lock_file) {
-            $self->_log->warn("Destination BBS: $name ($connect_info) is currently locked by another online user. :: Marking as busy in BBS list");
-            $is_busy = 1;
+            if (time - ((stat($self->_conn_lock_file))[9]) > $self->_config->get('client_max_session_dur', 2000)) {
+                $self->_log->fatal("Lock file exists but previous session is expired. Force deleting lock file and allowing new session!");
+                unlink($self->_conn_lock_file) or do {
+                    $self->_log->fatal("Failed to delete lock file! :: $!");
+                };
+            } else {
+                $self->_log->warn("Destination BBS: $name ($connect_info) is currently locked by another online user. :: Marking as busy in BBS list");
+                $is_busy = 1;
+            }
         }
 
         $self->_log->info("Destination BBS: $name ($connect_info) is online.");
