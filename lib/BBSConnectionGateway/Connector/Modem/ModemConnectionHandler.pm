@@ -173,9 +173,10 @@ sub _get_online_bbses {
             }
         }
 
+        my $is_busy = 0;
         if ($use_conn_lock && -e $self->_conn_lock_file) {
-            $self->_log->warn("Destination BBS: $name ($connect_info) is currently locked by another online user. :: Not including in online check/BBS list");
-            next;
+            $self->_log->warn("Destination BBS: $name ($connect_info) is currently locked by another online user. :: Marking as busy in BBS list");
+            $is_busy = 1;
         }
 
         $self->_log->info("Destination BBS: $name ($connect_info) is online.");
@@ -183,6 +184,7 @@ sub _get_online_bbses {
             name => $name,
             ip => $ip,
             port => $port,
+            is_busy => $is_busy,
             use_conn_lock => $use_conn_lock,
         };
         $idx++;
@@ -306,21 +308,26 @@ sub _get_user_dest_bbs_selection {
     $modem_dev->write("---------------------" . $self->_newline);
 
     foreach my $idx (sort { $a <=> $b } keys $online_bbses->%*) {
-        $modem_dev->write(" " . ($idx + 1) . ") " . $online_bbses->{$idx}{name} . $self->_newline);
+        my $line = " " . ($idx + 1) . ") " . $online_bbses->{$idx}{name};
+        $line .= "  (Busy)" if ($online_bbses->{$idx}{is_busy});
+        $line .= $self->_newline;
+        $modem_dev->write($line);
         $self->_log->warn("Failed to wait for data to write") if (!$modem_dev->write_drain);
     }
     $modem_dev->write(" G)ood Bye" . $self->_newline . $self->_newline);
     $self->_log->warn("Failed to wait for data to write") if (!$modem_dev->write_drain);
-    $modem_dev->write("Choice [1]? ");
-    $self->_log->warn("Failed to wait for data to write") if (!$modem_dev->write_drain);
+
 
     my $selected_idx;
     my $attempts = 0;
     my $is_valid = 0;
-    my $atascii_newline = chr(155);
+    my $atascii_newline = chr(ATASCII_NEWLINE);
     while (!$is_valid) {
-        my $recv = '';
 
+        $modem_dev->write("Choice [1]? ");
+        $self->_log->warn("Failed to wait for data to write") if (!$modem_dev->write_drain);
+
+        my $recv = '';
 
         my $timeout_count = 0;
         while (!$recv) {
@@ -341,15 +348,22 @@ sub _get_user_dest_bbs_selection {
         if ($recv =~ m/^\d+$/) {
             $recv--;
             if (exists $online_bbses->{$recv}) {
-                $selected_idx = $recv;
-                $is_valid = 1;
+                if ($online_bbses->{$recv}{is_busy}) {
+                    $modem_dev->write($self->_newline . "Sorry, " . $online_bbses->{$recv}{name} . " is currently busy!" . $self->_newline);
+                    next;
+                } else {
+                    $selected_idx = $recv;
+                    $is_valid = 1;
+                }
             }
         } elsif ($recv =~ m/G/i) {
             $modem_dev->write($self->_newline . "Disconnecting... Good bye!" . $self->_newline);
             $self->_log->warn("Failed to wait for data to write") if (!$modem_dev->write_drain);
             sleep 1;
             die "User quit instead of selecting a BBS. Disconnecting...";
-        } else {
+        }
+
+        if (!$is_valid) {
             $modem_dev->write($self->_newline . "Invalid selection!" . $self->_newline);
             sleep 1;
 
@@ -360,9 +374,6 @@ sub _get_user_dest_bbs_selection {
                 $self->_log->warn("Failed to wait for data to write") if (!$modem_dev->write_drain);
                 sleep 1;
                 die "Failed to get BBS selection after $attempts invalid entries. Disconnecting user...";
-            } else {
-                $modem_dev->write("Choice [1]? ");
-                $self->_log->warn("Failed to wait for data to write") if (!$modem_dev->write_drain);
             }
         }
     }
