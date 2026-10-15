@@ -1,0 +1,382 @@
+package BBSConnectionGateway::Connector::Network::NetworkConnectionHandler;
+
+use v5.38;
+use feature qw(try);
+
+use Carp;
+use Data::Dumper;
+use IO::Socket::INET;
+use threads ('exit' => 'threads_only');
+
+use BBSConnectionGateway::Template::TemplateRenderer qw(BUSY_TEMPLATE OFFLINE_TEMPLATE CONNECT_TEMPLATE MAX_CONNECTIONS_TEMPLATE);
+
+
+no warnings qw(experimental::try);
+
+$Data::Dumper::Sortkeys = 1;
+
+
+sub new {
+    my ($class, %args) = @_;
+
+    my $config = BBSConnectionGateway::Configuration::Config->new(package => $class);
+    my $log = BBSConnectionGateway::Log::Logger->new(name => $class);
+    my $lock_file = $args{conn_lock_file} || './conn.lock';
+
+    my $server_socket = IO::Socket::INET->new(
+       # LocalHost => $config->get('server_host'),
+        LocalPort => $ENV{PORT} // $config->get('server_port'),
+        Proto => $config->get('server_proto'),
+        Listen => $config->get('server_listen'), # SOMAXCONN,
+        Timeout => $config->get('server_timeout'),
+        ReuseAddr => $config->get('server_reuse_address'),
+        Type => SOCK_STREAM,
+    );
+
+    confess "Failed to set server socket: $!" if (!$server_socket);
+
+    # sets timeout for input on recv calls. (l!l! = type long long.. hacky and not very portable.)
+    # needed for 'RAW' connections instead of TELNET as they don't listen to server_timeout set above.
+    $server_socket->setsockopt(
+        SOL_SOCKET, SO_RCVTIMEO,
+        pack('l!l!', $config->get('server_input_timeout', 10), 0)
+    ) or confess "Failed to set recv timout: $!";
+
+    my @blocked_ip_prefixes = split(/,/, $config->get('ip_block_list', ''));
+    my @allowed_ip_prefixes = split(/,/, $config->get('ip_allow_list', ''));
+    my $template_renderer = BBSConnectionGateway::Template::TemplateRenderer->new;
+
+    my $self = {
+        allowed_ip_prefixes => \@allowed_ip_prefixes,
+        blocked_ip_prefixes => \@blocked_ip_prefixes,
+        config => $config,
+        log => $log,
+        server_socket => $server_socket,
+        conn_lock_file => $lock_file,
+        last_connect => 0,
+        template_renderer => $template_renderer,
+    };
+
+    return bless($self, $class);
+}
+
+
+sub _config {
+    return shift->{config};
+}
+
+sub _log {
+    return shift->{log};
+}
+
+
+sub _allowed_ip_prefixes {
+    return shift->{allowed_ip_prefixes};
+}
+
+sub _blocked_ip_prefixes {
+    return shift->{blocked_ip_prefixes};
+}
+
+
+sub _server_socket {
+    return shift->{server_socket} // die "Communication socket not set!";
+}
+
+sub _last_connect {
+    my ($self, $new_val) = @_;
+
+    if (defined $new_val && $new_val > 0) {
+        $self->_log->warn("Setting last connect to: " . $new_val);
+        $self->{last_connect} = $new_val;
+    }
+
+    return $self->{last_connect} // 0;
+}
+
+
+sub _conn_lock_file {
+    return shift->{conn_lock_file};
+}
+
+
+sub _template {
+    return shift->{template_renderer};
+}
+
+
+
+
+=head2 _is_ip_blocked
+    Checks to see if the given client IP matches any of the configured
+    blocked IP prefixes in the configuration. If a match is found,
+    another check will be done to see if it's found in the allow list.
+    If an allow entry is found, the ip is not blocked and 0 (false) is
+    returned. Otherwise, 1 (true) is returned.
+
+    If ip address is not in block list, 0 (false) is returned.
+=cut
+sub _is_ip_blocked {
+    my ($self, $client_ip) = @_;
+    return 1 if (!$client_ip);
+
+    foreach my $blocked_ip_prefix ($self->_blocked_ip_prefixes->@*) {
+        if ($client_ip =~ m/^$blocked_ip_prefix/) {
+
+            foreach my $allowed_ip_prefix ($self->_allowed_ip_prefixes->@*) {
+                if ($client_ip =~ m/^$allowed_ip_prefix/) {
+                    $self->_log->warn("IP address: $client_ip is found in allowed ip list entry: $allowed_ip_prefix :: Block overidden!");
+                    return 0;
+                }
+            }
+
+            $self->_log->fatal("IP address: $client_ip is found in blocked ip list entry: $blocked_ip_prefix");
+            return 1;
+        }
+    }
+    return 0;
+}
+
+
+
+
+
+
+=head2 _handle_user_connection
+    (New thread) Connects user to BBS and deletes lock file on disconnect
+=cut
+sub _handle_user_connection {
+    my ($self, $client_socket) = @_;
+
+    # Thread 'cancelation' signal handler
+    $SIG{'KILL'} = sub { threads->exit(); };
+
+    my $client_ip = $client_socket->peerhost;
+
+    $self->_log->info("Connection from IP: $client_ip:" . $client_socket->peerport);
+
+
+    $client_socket->timeout(1);
+    # sets timeout for input on recv calls. (l!l! = type long long.. hacky and not very portable.
+    # needed for 'RAW' connections instead of TELNET as they don't listen to timeout set above.
+    $client_socket->setsockopt(
+        SOL_SOCKET, SO_RCVTIMEO,
+        pack('l!l!', 1, 0)
+    ) or confess "Failed to set recv timout: $!";
+
+
+    if ($self->_config->get('enable_connect_prompt_filter', 1)) {
+        my $connect_ascii_code = $self->_config->get('connect_ascii_code', 13);
+        my $chars_attempt_count = 0;
+        my $total_chars_attemtped_count = 0; #includes ignored ones
+        my $ascii_code = 0;
+        my @ignore_ascii_codes = (1, 3, 5, 6, 23 .. 26, 28 .. 34, 36, 39, 240 .. 255); #telnet control codes (maybe should be a config?)
+
+        $self->_log->info("Validating connection :: IP: $client_ip:" . $client_socket->peerport . " :: Waiting for valid ENTER/RETURN key press...");
+
+        $self->_template->render($client_socket, CONNECT_TEMPLATE);
+
+        do {
+            my $temp_input;
+            $client_socket->recv($temp_input, 1);
+            $total_chars_attemtped_count++;
+            if ($temp_input) {
+                $ascii_code = unpack('C', $temp_input);
+                $self->_log->debug("Validating connection :: IP: $client_ip:" . $client_socket->peerport . " :: ASCII=$ascii_code :: Attempt: $chars_attempt_count");
+                $chars_attempt_count++ if (!grep(/$ascii_code/, @ignore_ascii_codes));
+            }
+        } until ($ascii_code == $connect_ascii_code || $chars_attempt_count >= 5 || $total_chars_attemtped_count > 30);
+
+        if ($ascii_code != $connect_ascii_code) {
+            $self->_log->fatal("Invalid ASCII code entered: $ascii_code :: chars attempted: $chars_attempt_count :: total_chars_attempted: $total_chars_attemtped_count :: Cannot determine connection type.. disconnecting user from ip: $client_ip");
+            sleep 1;
+            $client_socket->close;
+            return;
+        }
+    }
+
+    my $server_socket;
+
+    try {
+        $server_socket = IO::Socket::INET->new(PeerAddr => $self->_config->get('destination_bbs_host', 'localhost'),
+                                        PeerPort => $self->_config->get('destination_bbs_port', 9223),
+                                        Proto    => $self->_config->get('destination_bbs_proto', 'tcp'),
+                                        Timeout  => 1);
+        die "Connect failed!" unless $server_socket;
+    } catch ($connect_error) {
+        $self->_log->error("Can't connect to external BBS! :: $connect_error");
+        $self->_template->render($client_socket, OFFLINE_TEMPLATE);
+        sleep 1;
+        $client_socket->close;
+        return;
+    }
+
+    $server_socket->setsockopt(
+        SOL_SOCKET, SO_RCVTIMEO,
+        pack('l!l!', 1, 0)
+    ) or confess "Failed to set recv timout: $!";
+
+    # set client input timeout small but not small enough to fry the CPU burning cycles.
+    $client_socket->setsockopt(
+        SOL_SOCKET, SO_RCVTIMEO,
+        pack('l!l!', 0, 500)
+    ) or confess "Failed to set recv timout: $!";
+
+
+    $client_socket->blocking(1); # blocking so not to use max cpu on connections
+    $server_socket->blocking(0);
+    $self->_log->info("Successfully connected to remote BBS server!");
+
+    $self->_log->info("Creating new connection lock file: " . $self->_conn_lock_file);
+    open(my $FH, ">", $self->_conn_lock_file);
+    close($FH);
+
+    my $last_send = time;
+    my $timeout_warning_sent = 0;
+    my $timeout_warning = $self->_config->get('client_input_timeout_warning', 60);
+    my $timeout = $self->_config->get('client_input_timeout', 90);
+    my $server_input = '';
+    my $client_input = '';
+    my $bytes_read = 0;
+
+    try {
+        while ($client_socket->connected && $server_socket->connected) {
+
+            $server_input = '';
+
+            $bytes_read = $server_socket->sysread($server_input, 1024);
+
+            if ($server_input ne '') {
+                $client_socket->send($server_input);
+            } elsif (defined $bytes_read && $bytes_read == 0) {
+                $self->_log->fatal("Server disconnected! Closing server socket.");
+                $server_socket->close();
+            }
+
+            $client_input = '';
+            my $bytes_sent = $client_socket->sysread($client_input, 1024);
+
+            if ($client_input ne '') {
+                $server_socket->send($client_input);
+                $last_send = time;
+                $timeout_warning_sent = 0;
+            } elsif (defined $bytes_sent && $bytes_sent == 0) {
+                $self->_log->fatal("Client disconnected! Closing connection(s)");
+                $server_socket->close();
+                $client_socket->close();
+            }
+
+            my $inactivity = time - $last_send;
+
+            if ($inactivity > $timeout) {
+                $self->_log->error("Client timeout after inactivity for $inactivity seconds. Disconnecting...");
+                $client_socket->send(pack('C', 155) . ">>Connection closed due to inactivity!" . pack('C', 155));
+                $server_socket->close;
+            } elsif (!$timeout_warning_sent && $inactivity > $timeout_warning) {
+                $self->_log->warn("Sending client inactivity time out warning. Currently inactive for $inactivity seconds.");
+                $client_socket->send(pack('C', 155) . ">>WARN: Inactivity time out! ");
+                $timeout_warning_sent = 1;
+            }
+        }
+    } catch ($session_error) {
+        $self->_log->fatal("Exception thrown during session! :: $session_error");
+    }
+
+    $self->_log->info("Deleting connection lock file: " . $self->_conn_lock_file);
+    unlink($self->_conn_lock_file) or do {
+        $self->_log->fatal("Failed to delete lock file! :: $!");
+    };
+
+    $self->_log->info("Leaving client thread and closing connection for client: $client_ip...");
+    $client_socket->close;
+
+    return;
+}
+
+
+
+
+sub run {
+    my ($self) = @_;
+
+    my $num_worker_threads = threads->list(threads::all); # workers are set up before connections so threads will already be running.
+    my $max_num_user_threads = $self->_config->get('max_num_user_connections', 5);
+
+    while (1) {
+
+        my $client_socket = $self->_server_socket->accept;
+
+        # check for stale configs between connections.
+        $self->_config->refresh_config;
+        $self->_template->refresh_config;
+
+        if ($client_socket && $client_socket->connected) {
+
+            my $client_ip = $client_socket->peerhost;
+
+            if ($self->_is_ip_blocked($client_ip)) {
+                $self->_log->fatal("Disconnecting blocked user from ip: $client_ip:" . $client_socket->peerport);
+                $client_socket->close;
+
+            } else {
+                my $cur_num_user_threads = (threads->list(threads::running)) - $num_worker_threads;
+                my $allow_connect = 1;
+                if ($cur_num_user_threads < $max_num_user_threads) {
+
+                    $self->_log->warn("New connection accepted from $client_ip :: Num worker threads: $num_worker_threads :: Num user threads: " . ($cur_num_user_threads + 1) . " :: Max user threads: $max_num_user_threads");
+
+                    if (-e $self->_conn_lock_file) {
+                        if (time - $self->_last_connect > $self->_config->get('client_max_session_dur', 2000)) {
+                            $self->_log->fatal("Lock file exists but previous session is expired. Force deleting lock file and allowing new session!");
+                            unlink($self->_conn_lock_file) or do {
+                                $self->_log->fatal("Failed to delete lock file! :: $!");
+                            };
+                        } else {
+                            $self->_log->warn("BBS connection lock file exists! BBS is currently busy. Disconnecting user...");
+                            $self->_template->render($client_socket, BUSY_TEMPLATE);
+                            sleep 1;
+                            $client_socket->close;
+                            $allow_connect = 0;
+                       }
+                    }
+
+                    if ($allow_connect) {
+                        $self->_last_connect(time);
+                        my $user_handler_thread = threads->new(sub {
+                            try {
+                                $self->_handle_user_connection($client_socket);
+                            } catch ($conn_error) {
+                                $self->_log->fatal("CONN_ERROR: $conn_error");
+                            }
+                        });
+                    }
+
+                } else {
+                    $self->_log->fatal("Connection blocked due to max connections already open. Num worker threads: $num_worker_threads :: Num user threads: $cur_num_user_threads :: Max user threads: $max_num_user_threads");
+                    $self->_template->render($client_socket, MAX_CONNECTIONS_TEMPLATE);
+                    sleep 1;
+                    $client_socket->close;
+                }
+            }
+
+        } else {
+            $self->_log->debug("TIMEOUT :: Client did not connect...");
+        }
+
+        try {
+            foreach my $joinable ( threads->list(threads::joinable) ) {
+                $self->_log->info("Cleaning up completed threads between connections :: Joining joinable tid: " . $joinable->tid);
+                $joinable->join;
+            }
+        } catch ($join_ex) {
+            $self->_log->fatal("Error joining closed threads! :: $join_ex");
+        }
+    }
+
+    $self->_server_socket->close;
+
+    return;
+}
+
+
+1;

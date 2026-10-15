@@ -9,8 +9,8 @@ use BBSConnectionGateway;
 
 sub main {
     my $custom_config = $ARGV[0] // "";
-    my $filter = BBSConnectionGateway->new(config => $custom_config);
-    $filter->run;
+    my $bcgw = BBSConnectionGateway->new(config => $custom_config);
+    $bcgw->run;
 
     return 0;
 }

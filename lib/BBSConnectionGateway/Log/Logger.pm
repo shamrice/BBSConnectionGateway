@@ -1,6 +1,6 @@
 package BBSConnectionGateway::Log::Logger;
 
-use v5.34;
+use v5.38;
 
 use threads;
 

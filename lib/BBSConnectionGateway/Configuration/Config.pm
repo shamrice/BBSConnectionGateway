@@ -1,6 +1,6 @@
 package BBSConnectionGateway::Configuration::Config;
 
-use v5.34;
+use v5.38;
 
 use Carp;
 use Config::Tiny;
@@ -82,8 +82,8 @@ sub refresh_config {
         confess "Failed to read config file: " . $self->{config_file} . " :: " . $Config::Tiny::errstr if ($Config::Tiny::errstr);
         return 1;
     }
-    return;
 
+    return;
 }
 
 sub _section {
@@ -117,5 +117,6 @@ sub get {
     $self->refresh_config;
     return $self->_config->{$config_key} // $default_value;
 }
+
 
 1;

@@ -1,6 +1,6 @@
 package BBSConnectionGateway::Template::TemplateRenderer;
 
-use v5.34;
+use v5.38;
 
 use Carp;
 use Config::Tiny;

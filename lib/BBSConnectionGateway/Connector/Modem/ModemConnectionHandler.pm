@@ -1,6 +1,6 @@
-package BBSConnectionGateway::Modem::ModemConnectionHandler;
+package BBSConnectionGateway::Connector::Modem::ModemConnectionHandler;
 
-use v5.34;
+use v5.38;
 use feature qw(try);
 
 use Carp;
@@ -37,7 +37,7 @@ sub new {
 
     my $config = BBSConnectionGateway::Configuration::Config->new(package => $class);
     my $log = BBSConnectionGateway::Log::Logger->new(name => $class);
-    my $lock_file = $args{conn_lock_file} || './conn.log';
+    my $lock_file = $args{conn_lock_file} || './conn.lock';
 
     my $com_port = $config->get('modem_com_port', '/dev/ttyACM0');
     my $baud_rate = $config->get('modem_baud_rate', 300);

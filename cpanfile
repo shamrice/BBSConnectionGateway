@@ -2,7 +2,7 @@
 #
 # cpanm --installdeps -n .
 #
-requires 'perl', 'v5.34';
+requires 'perl', 'v5.38';
 requires 'Carp';
 requires 'Config::Tiny';
 requires 'Date::Parse';
