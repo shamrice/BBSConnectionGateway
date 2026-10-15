@@ -60,10 +60,16 @@ sub run {
     my ($self) = @_;
     $self->_log->info("BBSConnectionGateway starting...");
 
+    my $is_dialup_enabled = $self->_config->get('dialup_connector_enabled', 0);
+    my $is_network_enabled = $self->_config->get('network_connector_enabled', 1);
+
+    if (!$is_dialup_enabled && !$is_network_enabled) {
+        confess "No connectors are currently enabled in the config! Nothing to run!!";
+    }
+
     my $log_queue_thread = threads->new(sub {
         BBSConnectionGateway::Log::LogQueue::log_queue_handler_thread;
     });
-
 
     if (-e $self->_conn_lock_file) {
         $self->_log->warn("Connection lock file exists on start up! Deleting existing file...");
@@ -73,7 +79,7 @@ sub run {
         };
     }
 
-    if ($self->_config->get('dialup_enabled', 0)) {
+    if ($is_dialup_enabled) {
         $self->_log->info("Dial up enabled. Starting dial up service thread.");
         my $dialup_thread = threads->new(sub {
             while (1) {
@@ -88,17 +94,19 @@ sub run {
         });
     }
 
-    my $network_thread = threads->new(sub {
-        while (1) {
-            try {
-                my $network_handler = BBSConnectionGateway::Connector::Network::NetworkConnectionHandler->new(conn_lock_file => $self->_conn_lock_file);
-                $network_handler->run;
-            } catch ($network_ex) {
-                $self->_log->fatal("Fatal error in network handler thread. Sleeping 5 minutes and trying again... :: ERROR: $network_ex");
-                sleep 300;
+    if ($is_network_enabled) {
+        my $network_thread = threads->new(sub {
+            while (1) {
+                try {
+                    my $network_handler = BBSConnectionGateway::Connector::Network::NetworkConnectionHandler->new(conn_lock_file => $self->_conn_lock_file);
+                    $network_handler->run;
+                } catch ($network_ex) {
+                    $self->_log->fatal("Fatal error in network handler thread. Sleeping 5 minutes and trying again... :: ERROR: $network_ex");
+                    sleep 300;
+                }
             }
-        }
-    });
+        });
+    }
 
     $_->join foreach (threads->list(threads::all));
 
