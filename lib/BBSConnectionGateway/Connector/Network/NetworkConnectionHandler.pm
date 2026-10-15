@@ -83,17 +83,6 @@ sub _server_socket {
     return shift->{server_socket} // die "Communication socket not set!";
 }
 
-sub _last_connect {
-    my ($self, $new_val) = @_;
-
-    if (defined $new_val && $new_val > 0) {
-        $self->_log->warn("Setting last connect to: " . $new_val);
-        $self->{last_connect} = $new_val;
-    }
-
-    return $self->{last_connect} // 0;
-}
-
 
 sub _conn_lock_file {
     return shift->{conn_lock_file};
@@ -326,7 +315,7 @@ sub run {
                     $self->_log->warn("New connection accepted from $client_ip :: Num worker threads: $num_worker_threads :: Num user threads: " . ($cur_num_user_threads + 1) . " :: Max user threads: $max_num_user_threads");
 
                     if (-e $self->_conn_lock_file) {
-                        if (time - $self->_last_connect > $self->_config->get('client_max_session_dur', 2000)) {
+                        if (time - ((stat($self->_conn_lock_file))[9]) > $self->_config->get('client_max_session_dur', 2000)) {
                             $self->_log->fatal("Lock file exists but previous session is expired. Force deleting lock file and allowing new session!");
                             unlink($self->_conn_lock_file) or do {
                                 $self->_log->fatal("Failed to delete lock file! :: $!");
@@ -341,7 +330,6 @@ sub run {
                     }
 
                     if ($allow_connect) {
-                        $self->_last_connect(time);
                         my $user_handler_thread = threads->new(sub {
                             try {
                                 $self->_handle_user_connection($client_socket);

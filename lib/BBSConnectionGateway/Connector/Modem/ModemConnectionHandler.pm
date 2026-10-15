@@ -142,7 +142,7 @@ sub _get_online_bbses {
     }
 
     foreach my $dest_bbs ($self->_dest_bbses->@*) {
-        my ($name, $connect_info, $connect_ascii_codes_raw) = split('\|', $dest_bbs);
+        my ($name, $connect_info, $connect_ascii_codes_raw, $use_conn_lock) = split('\|', $dest_bbs);
 
         $name ||= '';
         if (!$connect_info) {
@@ -173,11 +173,17 @@ sub _get_online_bbses {
             }
         }
 
+        if ($use_conn_lock && -e $self->_conn_lock_file) {
+            $self->_log->warn("Destination BBS: $name ($connect_info) is currently locked by another online user. :: Not including in online check/BBS list");
+            next;
+        }
+
         $self->_log->info("Destination BBS: $name ($connect_info) is online.");
         $online_bbses{$idx} = {
             name => $name,
             ip => $ip,
             port => $port,
+            use_conn_lock => $use_conn_lock,
         };
         $idx++;
     }
@@ -308,7 +314,7 @@ sub _get_user_dest_bbs_selection {
     $modem_dev->write("Choice [1]? ");
     $self->_log->warn("Failed to wait for data to write") if (!$modem_dev->write_drain);
 
-    my $dest_socket;
+    my $selected_idx;
     my $attempts = 0;
     my $is_valid = 0;
     my $atascii_newline = chr(155);
@@ -319,7 +325,7 @@ sub _get_user_dest_bbs_selection {
         my $timeout_count = 0;
         while (!$recv) {
             $recv = $modem_dev->read(1) . $modem_dev->input;
-            $timeout_count++ if (!$recv && $recv != '0');
+            $timeout_count++ if (!$recv && $recv ne '0');
 
             if ($timeout_count > 5) {
                 die "Failed to get a response on BBS selection screen after $timeout_count input timeouts :: Disconnecting";
@@ -335,7 +341,7 @@ sub _get_user_dest_bbs_selection {
         if ($recv =~ m/^\d+$/) {
             $recv--;
             if (exists $online_bbses->{$recv}) {
-                $dest_socket = $self->_connect_to_remote_bbs($online_bbses->{$recv});
+                $selected_idx = $recv;
                 $is_valid = 1;
             }
         } elsif ($recv =~ m/G/i) {
@@ -363,7 +369,7 @@ sub _get_user_dest_bbs_selection {
 
     $modem_dev->write($self->_newline);
 
-    return $dest_socket;
+    return $selected_idx;
 }
 
 
@@ -462,6 +468,7 @@ sub run {
 
     while(1) {
         my $is_conn = 0;
+        my $used_conn_lock = 0;
         my $modem;
         my $server_socket;
 
@@ -478,6 +485,7 @@ sub run {
 
             my $online_bbses = $self->_get_online_bbses;
             my $num_online_bbses = scalar (keys $online_bbses->%*);
+            my $selected_bbs_info;
 
             if (!$num_online_bbses) {
                 $modem->write($self->_newline . "Sorry, BBS is currently offline!" . $self->_newline . "Please try again later." . $self->_newline);
@@ -485,11 +493,16 @@ sub run {
                 sleep 5;
                 confess "No online BBSes to connect to!";
             } elsif ($num_online_bbses == 1) {
-                $server_socket = $self->_connect_to_remote_bbs($online_bbses->{0});
+                $selected_bbs_info = $online_bbses->{0}; # default to the only available one
             } else {
                 $self->_log->info("$num_online_bbses BBSes are online. Presenting list for user to choose destination...");
-                $server_socket = $self->_get_user_dest_bbs_selection($modem, $online_bbses);
+                my $selected_idx = $self->_get_user_dest_bbs_selection($modem, $online_bbses);
+                if (defined $selected_idx) {
+                    $selected_bbs_info = $online_bbses->{$selected_idx};
+                }
             }
+
+            $server_socket = $self->_connect_to_remote_bbs($selected_bbs_info);
 
             if (!$server_socket) {
                 $modem->write($self->_newline . "Sorry, BBS is currently offline!" . $self->_newline . "Please try again later." . $self->_newline);
@@ -509,6 +522,14 @@ sub run {
 
             $modem->read_const_time(250); # seems to be enough to keep CPU from screaming and also
                                           # text input not so delayed
+
+
+            if ($selected_bbs_info->{use_conn_lock}) {
+                $self->_log->info("Creating new connection lock file: " . $self->_conn_lock_file);
+                open(my $FH, ">", $self->_conn_lock_file);
+                close($FH);
+                $used_conn_lock = 1;
+            }
 
 
             while ($is_conn && $server_socket->connected) {
@@ -571,7 +592,11 @@ sub run {
                 # TODO : using read(1) makes it blocking with timeout but causes issues for
                 #        single char input or when the screen changes.
                 $client_input = $modem->read(1) . $modem->input;
-                $server_socket->send($client_input) if ($client_input || $client_input == 0);
+                if (defined $client_input) {
+                    if ($client_input || $client_input eq '0') {
+                        $server_socket->send($client_input);
+                    }
+                }
 
                 # check if connection dropped.. if so, hang up.
                 my $status = $modem->modemlines;
@@ -615,6 +640,14 @@ sub run {
         }
 
         undef $modem;
+
+        # clean up lock file if used during connection
+        if ($used_conn_lock) {
+            $self->_log->info("Deleting connection lock file: " . $self->_conn_lock_file);
+            unlink($self->_conn_lock_file) or do {
+                $self->_log->fatal("Failed to delete connection lock file! :: $!");
+            };
+        }
 
         $self->_log->warn("Modem connection closed. Resetting for next connection...");
         sleep $sleep_dur_on_connect;
