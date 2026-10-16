@@ -509,7 +509,7 @@ sub run {
                 $modem->write($self->_newline . "Sorry, BBS is currently offline!" . $self->_newline . "Please try again later." . $self->_newline);
                 $self->_log->warn("Failed to wait for data to write") if (!$modem->write_drain);
                 sleep 5;
-                confess "No online BBSes to connect to!";
+                die "No online BBSes to connect to!";
             } elsif ($num_online_bbses == 1) {
                 $selected_bbs_info = $online_bbses->{0}; # default to the only available one
             } else {
@@ -533,7 +533,7 @@ sub run {
                 $modem->write($self->_newline . "Sorry, " . $selected_bbs_info->{name} . " is currently offline!" . $self->_newline . "Please try again later." . $self->_newline);
                 $self->_log->warn("Failed to wait for data to write") if (!$modem->write_drain);
                 sleep 5;
-                confess "No destination BBS selected to connect to. Disconnecting user...";
+                die "No destination BBS selected to connect to. Disconnecting user...";
             }
 
 
@@ -616,10 +616,15 @@ sub run {
 
                 # TODO : using read(1) makes it blocking with timeout but causes issues for
                 #        single char input or when the screen changes.
-                $client_input = $modem->read(1) . $modem->input;
+                #$client_input = $modem->read(1) . $modem->input;
+
+                $client_input = $modem->input;
                 if (defined $client_input) {
                     if ($client_input || $client_input eq '0') {
                         $server_socket->send($client_input);
+                        $self->_log->info($client_input . '|');
+                    } else {
+                        usleep(1500);
                     }
                 }
 
