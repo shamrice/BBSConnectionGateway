@@ -20,8 +20,13 @@ use constant {
 
     ASCII_NEWLINE => 10,
     ASCII_CARRIAGE_RETURN => 13,
+    ASCII_ESC => 27,
     ASCII_A_KEY => 65,
     ATASCII_NEWLINE => 155,
+    ASCII_CTRL_C => 3,
+    ASCII_CTRL_S => 19,
+    ASCII_BACKSPACE => 8,
+    ATASCII_BACKSPACE => 126,
 
 
     REMOTE_CONNECT_CHECK_CMD => 'nc -zv _IP_ _PORT_ 2>&1',
@@ -80,10 +85,13 @@ sub new {
     $modem->close;
     undef $modem;
 
+    my $char_send_wait_ms = ((1 + $data_bits + $stop_bits) / $baud_rate) * 1000000;
+
     my $self = {
         config => $config,
         log => $log,
         conn_lock_file => $lock_file,
+        char_send_wait_ms => $char_send_wait_ms,
     };
 
     $log->info("Constructor completed successfully.");
@@ -107,6 +115,11 @@ sub _conn_lock_file {
 sub _modem_config_file {
     return shift->_config->get('modem_temp_config_file', './modem.cfg');
 }
+
+sub _char_send_wait_ms {
+    return shift->{char_send_wait_ms};
+}
+
 
 sub _dest_bbses {
     my ($self) = @_;
@@ -571,47 +584,63 @@ sub run {
                 $server_input = '';
                 $client_input = '';
 
-                do {
-                    $bytes_read = $server_socket->sysread($server_input, 4096);
+                $bytes_read = $server_socket->sysread($server_input, 4096);
 
-                    if ($bytes_read) {
-                       # $self->_log->info("BYTES READ: " .  (length $bytes_read));
+                if ($bytes_read) {
+                    # $self->_log->info("BYTES READ: " .  (length $bytes_read));
 
-                        my @bytes = split('', $server_input);
+                    my @bytes = split('', $server_input);
+                    while (scalar @bytes) {
+                        my $is_interrupt_allowed = (scalar @bytes) > 40;
+                        my $byte = shift @bytes;
+                        my $count_out = $modem->write($byte);
 
-                        # TODO : check non-blocking user input on modem connection. If input == CTRL+C
-                        #        cancel whatever is being printed... or maybe just take whatever input, cancel
-                        #        printing and send that input to the server so user doesn't have to wait for a screen
-                        #        draw at 300baud.
+                        if ($count_out != length $byte) {
+                            $self->_log->error("Write failed. Partial transmission of |$byte| :: sent: $count_out");
+                        }
+                        $self->_log->warn("Failed to wait for data to write") if (!$modem->write_drain);
 
-                        foreach my $byte (@bytes) {
-                            my $count_out = $modem->write($byte);
-                            #print $byte . "|";
+                        # handle ^C and ^S.
+                        # ^C will print the last 35 chars in the buffer
+                        # ^S will pause until a user hits input again.
+                        if ($is_interrupt_allowed) {
+                            my $interrupt_input = $modem->input;
 
-                            #$client_input = $modem->input; # don't actually like this.. makes navigation really odd
-                                                           # when screen printing is stopped midway.. though it does work!
-                            #if ($client_input) {
-                            #    $self->_log->info("Printing results to user interrupted by: |$client_input|");
-                            #    last;
-                            #}
+                            if (ord($interrupt_input) == ASCII_CTRL_C) {
+                                $modem->write($self->_newline);
+                                @bytes = @bytes[-35 .. -1];
+                            } elsif (ord($interrupt_input) == ASCII_CTRL_S) {
+                                $modem->write("--PAUSED--");
 
-                            if (!$count_out) {
-                                $self->_log->error("Write failed! byte: $byte");
-                            } elsif ($count_out != length $byte) {
-                                $self->_log->error("Write failed. Partial transmission of |$byte| :: sent: $count_out");
+                                $interrupt_input = '';
+                                while (!$interrupt_input) {
+                                    $interrupt_input .= $modem->read(1) . $modem->input;
+                                }
+
+                                if ($self->_user_connection_type == ATASCII_NEWLINE) {
+                                    $modem->write((pack('C', ATASCII_BACKSPACE) x 10));
+                                } else {
+                                    foreach (1 .. 10) {
+                                        $modem->write(pack('C', ASCII_ESC) . '[1D');
+                                        $modem->write(' ');
+                                        $modem->write(pack('C', ASCII_BACKSPACE));
+                                        $self->_log->warn("Failed to wait for data to write") if (!$modem->write_drain);
+                                    }
+                                }
+                                $self->_log->warn("Failed to wait for data to write") if (!$modem->write_drain);
                             }
-                            $self->_log->warn("Failed to wait for data to write") if (!$modem->write_drain);
-                           # usleep(33333); # speed at which chars are sent @ 300 baud
                         }
 
-
-                    } elsif (defined $bytes_read && $bytes_read == 0) {
-                        $self->_log->fatal("Server disconnected! Closing server socket.");
-
-                        $is_conn = 0;
-                        last;
+                        usleep($self->_char_send_wait_ms); # speed at which chars are sent
                     }
-                } until (!$bytes_read);
+
+                } elsif (defined $bytes_read && $bytes_read == 0) {
+                    $self->_log->fatal("Server disconnected! Closing server socket.");
+
+                    $is_conn = 0;
+                    last;
+                }
+
 
 
                 # TODO : using read(1) makes it blocking with timeout but causes issues for
@@ -622,7 +651,7 @@ sub run {
                 if (defined $client_input) {
                     if ($client_input || $client_input eq '0') {
                         $server_socket->send($client_input);
-                        $self->_log->info($client_input . '|');
+                       # $self->_log->info($client_input . '|');
                     } else {
                         usleep(1500);
                     }
@@ -639,7 +668,7 @@ sub run {
             }
 
             $self->_log->warn("Failed to wait for data to write") if (!$modem->write_drain);
-            sleep 10;
+            sleep 1;
             $modem->write("\r". MODEM_ATTENTION . "\r" . MODEM_HANGUP . "\r");
             $self->_log->warn("Failed to wait for data to write") if (!$modem->write_drain);
 
