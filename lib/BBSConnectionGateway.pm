@@ -20,7 +20,7 @@ use BBSConnectionGateway::Connector::Network::NetworkConnectionHandler;
 
 no warnings qw(experimental::try);
 
-our $VERSION = '0.2';
+our $VERSION = '1.0';
 our $BOOT_DATE = DateTime->now;
 
 
