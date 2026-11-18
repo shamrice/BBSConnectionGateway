@@ -29,7 +29,7 @@ use constant {
     ATASCII_BACKSPACE => 126,
 
 
-    REMOTE_CONNECT_CHECK_CMD => 'nc -zv _IP_ _PORT_ 2>&1',
+    REMOTE_CONNECT_CHECK_CMD => 'timeout 5 nc -zv _IP_ _PORT_ 2>&1',
 };
 
 no warnings qw(experimental::try);
