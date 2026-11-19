@@ -29,7 +29,7 @@ use constant {
     ATASCII_BACKSPACE => 126,
 
 
-    REMOTE_CONNECT_CHECK_CMD => 'timeout 5 nc -zv _IP_ _PORT_ 2>&1',
+    REMOTE_CONNECT_CHECK_CMD => 'timeout _TIMEOUT_ nc -zv _IP_ _PORT_ 2>&1',
 };
 
 no warnings qw(experimental::try);
@@ -149,6 +149,8 @@ sub _get_online_bbses {
     my $user_connect_key = $self->_user_connection_type;
     my $check_if_online = $self->_config->get('check_destination_bbses_are_online', 0);
     my $filter_bbses = $self->_config->get('filter_destionation_bbses_to_users_conn_type', 1);
+    my $connect_timeout = $self->_config->get('check_destination_bbs_timeout', 5);
+    $connect_timeout = 5 if ($connect_timeout !~ m/^\d+$/);
 
     if (!$check_if_online) {
         $self->_log->warn("Destination online status check is disabled. All configured BBSes will be returned regardless if they are currently online or not.");
@@ -176,6 +178,7 @@ sub _get_online_bbses {
 
         if ($check_if_online) {
             my $conn_check_cmd = REMOTE_CONNECT_CHECK_CMD;
+            $conn_check_cmd =~ s/\_TIMEOUT\_/$connect_timeout/;
             $conn_check_cmd =~ s/\_IP\_/$ip/;
             $conn_check_cmd =~ s/\_PORT\_/$port/;
 
